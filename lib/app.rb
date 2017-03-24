@@ -3,15 +3,11 @@ require "json"
 require "mongo"
 
 require "cloud_foundry_environment"
-require "mongodb_collection"
+require "benchmark"
 
 class ExampleApp < Sinatra::Application
   before do
     content_type "text/plain"
-
-    unless mongo_service_bound_to_app?
-      tell_user_how_to_bind
-    end
   end
 
   post "/:collection" do
@@ -20,19 +16,29 @@ class ExampleApp < Sinatra::Application
 
   delete "/:collection" do
     collection_name = params[:collection]
-    mongodb_collection.with_collection(collection_name) do |collection|
-      collection.drop
-    end
+    mongodb_client[collection_name].drop
+    "DELETED " + collection_name
   end
 
   get "/:collection/:key" do
     collection_name = params[:collection]
     key = params[:key]
-    mongodb_collection.with_collection(collection_name) do |collection|
-      item = collection.find_one("key" => key)
-      halt 404 if item.nil?
-      item["value"]
-    end
+    collection = mongodb_client[collection_name]
+    item = collection.find("key" => key).first
+    halt 404 if item.nil?
+    item["value"]
+  end
+
+  get "/benchmark/:collection/:key" do
+    collection_name = params[:collection]
+    key = params[:key]
+    time_spent = Benchmark.measure {
+      benchmark_length.times {
+        collection = mongodb_client[collection_name]
+        item = collection.find("key" => key).first
+      }
+    }
+    time_spent.to_s
   end
 
   post "/:collection/:key/:value" do
@@ -40,11 +46,29 @@ class ExampleApp < Sinatra::Application
     key = params[:key]
     value = params[:value]
 
-    mongodb_collection.with_collection(collection_name, false) do |collection|
-      collection.update({'key' => key}, {'key' => key, 'value' => value}, upsert: true)
-    end
+    mongodb_client[collection_name].update_one(
+      {'key' => key}, {'key' => key, 'value' => value},
+      upsert: true
+    )
 
     status 201
+  end
+
+  post "/benchmark/:collection/:key/:value" do
+    collection_name = params[:collection]
+    key = params[:key]
+    value = params[:value]
+
+    time_spent = Benchmark.measure {
+      benchmark_length.times {
+        mongodb_client[collection_name].update_one(
+          {'key' => key}, {'key' => key, 'value' => value},
+          upsert: true
+        )
+      }
+    }
+
+    time_spent.to_s
   end
 
   def tell_user_collection_not_found
@@ -65,18 +89,16 @@ class ExampleApp < Sinatra::Application
 
   private
 
-  def mongodb_collection
-    @mongodb_collection ||= MongodbCollection.new(self)
-  end
-
   def cloud_foundry_environment
     @cloud_foundry_environment ||= CloudFoundryEnvironment.new
   end
 
-  def mongo_service_bound_to_app?
-    cloud_foundry_environment.mongo_uri
-    true
-  rescue CloudFoundryEnvironment::NoMongodbBoundError
-    false
+  def mongodb_client
+    @mongodb_client ||= Mongo::Client.new(cloud_foundry_environment.mongo_uri, ssl: true, ssl_verify: false)
   end
+
+  def benchmark_length
+    @benchmark_length ||= cloud_foundry_environment.benchmark_length
+  end
+
 end

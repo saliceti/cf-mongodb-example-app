@@ -6,9 +6,21 @@ class CloudFoundryEnvironment
   end
 
   def mongo_uri
-    services.fetch("p-mongodb").first.fetch("credentials").fetch("uri")
-  rescue KeyError
-    raise NoMongodbBoundError
+    if services.has_key?("p-mongodb")
+      services.fetch("p-mongodb").first.fetch("credentials").fetch("uri")
+    elsif services.has_key?("user-provided")
+      services.fetch("user-provided").first.fetch("credentials").fetch("uri")
+    else
+      raise NoMongodbBoundError
+    end
+
+    rescue KeyError => e
+      puts e.message
+      raise NoMongodbBoundError
+  end
+
+  def benchmark_length
+    ENV.to_h.fetch("BENCHMARK_LENGTH", "100").to_i
   end
 
   private
